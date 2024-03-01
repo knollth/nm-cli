@@ -3,7 +3,6 @@
 #lang racket
 
 (require net/http-easy)
-(require json)
 (require text-table)
 (require json/format/simple)
 (require json)
@@ -28,6 +27,7 @@
 (define matrNr (make-parameter #f))
 (define klasse (make-parameter #f))
 (define lf-id (make-parameter #f))
+(define mandatoryarg (make-parameter #f))
 
 (define (res-err operation status [custom-msg #f])
   (let* ([default-msgs (hash '401 "Zugriff verweigert"
@@ -47,7 +47,8 @@
          [status (response-status-code response)])
     (case status
       [(200) (response-json response)]
-      [else (res-err status endpoint)])))
+      [else (res-err endpoint status)])))
+
 
 
 (define (getGradesForStudent matrNr  [subject #f])
@@ -58,22 +59,6 @@
     [else
      (make-authenticated-request
       (string-append "/api" "/Schueler/" (number->string matrNr) "/Noten?sort=Fach"))]))
-
-
-(define (getGrades [matrNr #f] [klasse #f] [subject #f])
-  (let ([url (cond
-               [(and matrNr subject)
-                (string-append "/api/Schueler/" (number->string matrNr) "/Faecher/" subject "/Noten")]
-               [matrNr
-                (string-append "/api/Schueler/" (number->string matrNr) "/Noten?sort=Fach")]
-               [(and klasse subject)
-                (string-append "/api/Klassen/" klasse "/Faecher/" subject "/Noten")]
-               [klasse
-                (string-append "/api/Klassen/" klasse "/Noten?sort=Fach")]
-               [else
-                (error "Invalid parameters provided")])])
-    (make-authenticated-request url)))
-
 
 (define (getLFs klasse [subject #f])
   (let ([url (cond
@@ -248,59 +233,83 @@
 (define parser
   (command-line
    #:usage-help
-   "Have the computer greet you!"
+   "CLI Tool für HTL Notenmanagement
+   Bei Schüler werden automatisch die Klasse/matrNr des Schülers ausgewählt
+   Lehrer müssen bei manchen Funktionen --matrNr und --klasse den Schüler bzw die Klasse auswählen"
    #:multi
    [("--fach") fachname
                "set fachname"
                (fach fachname)]
    #:once-any
-   ["--format=json" "Display data in JSON Format"
+   ["--format=json" "Daten im JSON Format angezeigt"
                     (output-format "json")]
    ["--format=table"        (
-                             "Display data in a UTF-8 table format"
-                             "useful for piping")
+                             "Daten werden im UTF-8 table format"
+                             "geeignet für Unix piping")
                             (output-format "table")]
    ["--format=pptable"        (
-                               "Display data in prettyprinted table")
+                               "Daten als prettyprinted table anzeigen")
                               (output-format "ppable")]
    #:once-any
    [("--matrNr") matrikelNr
-                 "set matrikelNr"
+                 "matrikelNr setzen"
                  (matrNr (string->number matrikelNr))]
    [("--klasse") name
-                 "klasse setzen (nur für Lehrer)"
+                 "klasse auswählen"
                  (klasse name)]
    #:once-each
    [("-l" "--login") username password
-                     "Login with username and password"
+                     "Mit username und passwort anmelden"
                      (perform-login username password)
                      (action #f)]
-   [("-s" "--subjects")
-    "get subjects"
-    (action "subjects")]
+   [("-s" "--subjects") (
+                         "Fächer von Schüler ausgeben"
+                         "Lehrer können mit --matrNr Schüler auswählen"
+                         "wenn man als Lehrer keine matrNr angibt werden alle Fächer angezeigt"
+                         )
+                        (action "subjects")
+                        (mandatoryarg (list matrNr "--matrNr"))]
    [("--fw")
     "frühwarnungen"
     (action "fw")]
    [("-i" "--student-info")
-    "get student list"
-    (action "studentinfo")]
+    ("Schüler anzeigen"
+     "Lehrer können mit --matrNr Schüler auswählen."
+     "Ohne Zusatzparameter bekommt man als Lehrer die Schülerliste")
+    (action "dump")    (action "studentinfo")]
    [("-a" "--absences")
-    "get absences for student"
-    (action "absences")]
+    ("Fehlstunden von Schüler anzeigen"
+     "Lehrer müssen mit --matrNr Schüler auswählen."
+     "Ohne Zusatzparameter bekommt man als Lehrer die Schülerliste")
+    (action "absences")
+    (mandatoryarg (list matrNr "--matrNr"))]
    [("-d" "--dump-student")
-    "JSON dump of student with all Subjects and LFs as JSON"
-    (action "dump")]
+    ("JSON dump mit allen informationen von ausgewähltem Schüler"
+     "Lehrer müssen mit --matrNr den Schüler auswählen"
+     )
+    (action "dump")
+    (mandatoryarg (list matrNr "--matrNr"))]
    [("--lf")
-    "Leistungsfeststellungen"
-    (action "lf")]
+    ("Leistungsfeststellungen einer Klasse"
+     "Optional:"
+     "\t --subject"
+     "\t  Leistungsfeststellungen für ein Fach"
+     "Lehrer müssen mit --klasse die klasse auswählen"
+     )
+    (action "lf")
+    (mandatoryarg (list klasse "--klasse"))]
    [("--lf-grades") id
-                    "Noten von Leistungsfesstellung"
+                    ("Noten von Leistungsfesstellung"
+                     "Schüler können nur ihre eignen Leistungsfeststellungen auswählen"
+                     "Die ID einer Leistungsfeststellung ist mit --lf zu bekommen")
                     (action "lf-grades")
                     (lf-id (string->number id))
                     ]
-   [("-g" "--grades")  ("Get grades for a student."
-                        "Teachers only: Optionally specify matrNr and/or fachID.")
-                       (action "grades")]
+   [("-g" "--grades")  ("Noten von einem Schüler anzeigen"
+                        "Optional mit --fach für ein Fach anzeigen."
+                        "Leher müssen mit --matrNr Schüler auswählen")
+                       (action "grades")
+                       (mandatoryarg (list matrNr "--matrNr"))]
 
    #:args () (void)))
 
@@ -322,7 +331,16 @@
            (choose-action (action))
            ]
           [(equal? (hash-ref (session) 'role) "Lehrer")
-           (choose-action(action))
+           (if (and (mandatoryarg) (not((first (mandatoryarg)))))
+               [let ([last-param
+                      (if (number?  (last (mandatoryarg)))
+                          (number->string  (last (mandatoryarg)))
+                          (last (mandatoryarg)))
+                      ])
+                 (printf (string-append "Missing parameters: " last-param " is mandatory \n"))]
+               [choose-action (action)]
+
+               )
            ]
           [else
            (printf "Unrecognized role\n")])
