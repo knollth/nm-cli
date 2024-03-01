@@ -7,18 +7,9 @@
 (require text-table)
 (require json/format/simple)
 (require json)
-(require (prefix-in d. racket/date))
 (require (prefix-in s. srfi/19))
 
 (define base-url "https://notenmanagement.htl-braunau.at/rest")
-
-;; parameter My-Name is one of:
-;; - #false
-;; - String
-
-(define (rfc2822->unix-timee s) ;; string -> integer
-  (let ((d (s.string->date s "~a, ~d ~b ~Y ~H:~M:~S ~z")))
-    (s.time-second (s.date->time-utc d))))
 
 (define (rfc2822->unix-time s)
   ;; Replace "GMT" with "+0000" to match the expected format by string->date
@@ -29,10 +20,7 @@
 (define (string-replace str find replace)
   (regexp-replace* (regexp-quote find) str replace))
 
-
 (define access-token (make-parameter #f))
-(define username (make-parameter #f))
-(define password (make-parameter #f))
 (define session (make-parameter #f))
 (define output-format (make-parameter "table"))
 (define fach (make-parameter #f))
@@ -193,20 +181,6 @@
                       hashes-list)))
       (cons keys rows))))
 
-
-
-(define (print-data1 data)
-  (cond
-    [(equal? (output-format) "json")
-     (pretty-print-jsexpr  data)]
-    [(equal? (output-format) "ppable")
-     (print-table  (hashes-to-lists data))]
-    [else
-     (printf "printing as simple table\n")
-     (print-simple-table  (hashes-to-lists data))]
-    )
-  )
-
 (define (print-data data)
   (match data
     [(list)
@@ -219,20 +193,6 @@
         (print-table (hashes-to-lists data))]
        [else
         (print-simple-table (hashes-to-lists data))])]))
-
-
-
-(define (make-login-request username password)
-  (let* ([params `((grant_type . "password")
-                   (username . ,username)
-                   (password . ,password))]
-         [url (string-append base-url "/token")] ; Assume base-url is defined elsewhere
-         [response (post url #:form params)]
-         [status (response-status-code response)]
-         [operation "Login Request: "])
-    (if (= status 200)
-        (response-json response)
-        (res-err operation status (if (= status 400) "Ungültige Anmeldedaten" #f)))))
 
 (define (write-hash-to-json-file hash-table file-path)
   (call-with-output-file file-path
@@ -249,11 +209,34 @@
         (displayln "Error: Not logged in - session file not found.")
         #f))) ; Returning #f or a similar value to indicate the absence of valid data
 
+(define (make-login-request username password)
+  (let* ([params `((grant_type . "password")
+                   (username . ,username)
+                   (password . ,password))]
+         [url (string-append base-url "/token")] ; Assume base-url is defined elsewhere
+         [response (post url #:form params)]
+         [status (response-status-code response)]
+         [operation "Login Request: "])
+    (if (= status 200)
+        (response-json response)
+        (res-err operation status (if (= status 400) "Ungültige Anmeldedaten" #f)))))
+
+(define (perform-login username password)
+  (define loginres (make-login-request username password))
+  (access-token (hash-ref loginres 'access_token))
+  (session loginres)
+  (write-hash-to-json-file loginres "/tmp/nmcli-session.json")
+  (printf "~a\n" (string-append "logged in as: " (hash-ref (session) 'role)
+                                (if (hash-has-key? (session) 'matrikelNr)
+                                    (string-append " matrikelNr: " (hash-ref (session) 'matrikelNr))
+                                    "")))
+  )
+
 (define (choose-action action)
   (case action
     [("subjects") (print-data(getSubjects (matrNr)))]
     [("absences") (print-data(getAbsences (matrNr)))]
-    [("lf") (print-data getLFs (klasse) (fach))]
+    [("lf") (print-data (getLFs (klasse) (fach)))]
     [("grades") (print-data (getGradesForStudent (matrNr) (fach)))]
     [("lf-grades") (print-data (getGradesForLF (lf-id) (matrNr)))]
     [("fw") (print-data (getFW (matrNr) (klasse) (fach)))]
@@ -290,15 +273,8 @@
    #:once-each
    [("-l" "--login") username password
                      "Login with username and password"
-                     (action #f)
-                     (define loginres (make-login-request username password))
-                     (access-token (hash-ref loginres 'access_token))
-                     (session loginres)
-                     (write-hash-to-json-file loginres "/tmp/nmcli-session.json")
-                     (printf "~a\n" (string-append "logged in as: " (hash-ref (session) 'role)
-                                                   (if (hash-has-key? (session) 'matrikelNr)
-                                                       (string-append " matrikelNr: " (hash-ref (session) 'matrikelNr))
-                                                       "")))]
+                     (perform-login username password)
+                     (action #f)]
    [("-s" "--subjects")
     "get subjects"
     (action "subjects")]
