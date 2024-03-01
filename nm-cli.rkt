@@ -7,13 +7,27 @@
 (require text-table)
 (require json/format/simple)
 (require json)
+(require (prefix-in d. racket/date))
+(require (prefix-in s. srfi/19))
 
-(define url "https://notenmanagement.htl-braunau.at/rest")
+(define base-url "https://notenmanagement.htl-braunau.at/rest")
 
 ;; parameter My-Name is one of:
 ;; - #false
 ;; - String
-(struct lehrerInfo (lehrerID localLogin))
+
+(define (rfc2822->unix-timee s) ;; string -> integer
+  (let ((d (s.string->date s "~a, ~d ~b ~Y ~H:~M:~S ~z")))
+    (s.time-second (s.date->time-utc d))))
+
+(define (rfc2822->unix-time s)
+  ;; Replace "GMT" with "+0000" to match the expected format by string->date
+  (let* ((adjusted-s (string-replace s "GMT" "+0000"))
+         (date (s.string->date adjusted-s "~a, ~d ~b ~Y ~H:~M:~S ~z")))
+    (s.time-second (s.date->time-utc date))))
+
+(define (string-replace str find replace)
+  (regexp-replace* (regexp-quote find) str replace))
 
 
 (define access-token (make-parameter #f))
@@ -24,104 +38,103 @@
 (define fach (make-parameter #f))
 (define action (make-parameter #f))
 (define matrNr (make-parameter #f))
-(define fachID (make-parameter #f))
+(define klasse (make-parameter #f))
+(define lf-id (make-parameter #f))
 
+(define (res-err operation status [custom-msg #f])
+  (let* ([default-msgs (hash '401 "Zugriff verweigert"
+                             '404 "Ressource nicht gefunden"
+                             '500 "Internal Server Error bei Notenmanagement")]
+         [msg (if custom-msg custom-msg (hash-ref default-msgs status "Unknown Error"))])
+    (error (string-append "Fehler bei " operation ": " msg " (Status: " (number->string status) ")"))))
 
-(define (authenticated-request endpoint callback)
-  (if (access-token)
-      (let ([auth-procedure (bearer-auth (access-token))]
-            [full-url (string-append url endpoint)])
-        (callback full-url auth-procedure))
-      (error "No access token available.")))
+(define (make-authenticated-request endpoint [params #f])
+  (unless (access-token)
+    (error "No access token available."))
+  (let* ([auth-header (bearer-auth (access-token))]
+         [url (string-append base-url endpoint)]
+         [response (if params
+                       (post url #:auth auth-header #:form params)
+                       (get url #:auth auth-header #:headers '#hash((Content-Type . "application/x-www-form-urlencoded"))))]
+         [status (response-status-code response)])
+    (case status
+      [(200) (response-json response)]
+      [else (res-err status endpoint)])))
 
-(define (make-request url auth)
-  (let ([response (get url
-                       #:auth auth
-                       #:headers '#hash((Content-Type . "application/x-www-form-urlencoded")))])
-    (response-json response)))
 
 (define (getGradesForStudent matrNr  [subject #f])
   (cond
-    [(fach)
-     (authenticated-request (string-append "/api" "/Schueler/" (number->string matrNr) "/Faecher/" (fach) "/Noten")
-                            make-request)]
+    [subject
+     (make-authenticated-request
+      (string-append "/api" "/Schueler/" (number->string matrNr) "/Faecher/" subject "/Noten"))]
     [else
-     (authenticated-request (string-append "/api" "/Schueler/" (number->string matrNr) "/Noten?sort=Fach")
-                            make-request)]))
+     (make-authenticated-request
+      (string-append "/api" "/Schueler/" (number->string matrNr) "/Noten?sort=Fach"))]))
 
 
+(define (getGrades [matrNr #f] [klasse #f] [subject #f])
+  (let ([url (cond
+               [(and matrNr subject)
+                (string-append "/api/Schueler/" (number->string matrNr) "/Faecher/" subject "/Noten")]
+               [matrNr
+                (string-append "/api/Schueler/" (number->string matrNr) "/Noten?sort=Fach")]
+               [(and klasse subject)
+                (string-append "/api/Klassen/" klasse "/Faecher/" subject "/Noten")]
+               [klasse
+                (string-append "/api/Klassen/" klasse "/Noten?sort=Fach")]
+               [else
+                (error "Invalid parameters provided")])])
+    (make-authenticated-request url)))
 
-;; WIP
-(define (getGradesForKlasse klassenName [subject #f])
+
+(define (getLFs klasse [subject #f])
+  (let ([url (cond
+               [(and klasse subject)
+                (string-append "/api/Klassen/" klasse "/Faecher/" subject "/LFs")]
+               [klasse
+                (string-append "/api/Klassen/" klasse "/LFs?sort=Fach")]
+               [else
+                (error "Invalid parameters provided")])])
+    (make-authenticated-request url)))
+
+(define (getGradesForLF lfId  [matrNr #f] )
   (cond
-    [(not subject)
-     (authenticated-request (string-append "/api" "/Schueler/" (number->string matrNr) "/Noten?sort=Fach")
-                            make-request)]
+    [matrNr
+     (make-authenticated-request
+      (string-append "/api" "/LFs/" (number->string lfId) "/Schueler/" (number->string matrNr) "/Noten"))]
     [else
-     (authenticated-request (string-append "/api" "/Schueler/" (number->string matrNr) "/Faecher/" subject "/Noten")
-                            make-request)]))
-
+     (make-authenticated-request
+      (string-append "/api" "/LFs/" (number->string lfId) "/Noten"))]))
 
 
 (define (getSubjects [matrNr #f])
   (let ([url (if matrNr
                  (string-append "/api" "/Schueler/" (number->string matrNr) "/Faecher")
                  (string-append "/api" "/Faecher"))])
-    (authenticated-request url
-                           (lambda (url auth)
-                             (let ([response (get url
-                                                  #:auth auth
-                                                  #:headers '#hash((Content-Type . "application/x-www-form-urlencoded")))])
-                               (response-json response))))))
+    (make-authenticated-request url )))
 
 (define (getAbsences matrNr)
-  (authenticated-request (string-append "/api" "/Schueler/" (number->string matrNr) "/Fehlstunden")
-                         (lambda (url auth)
-                           (let ([response (get url
-                                                #:auth auth
-                                                #:headers '#hash((Content-Type . "application/x-www-form-urlencoded")))])
-                             (response-json response)))))
+  (make-authenticated-request (format "/api/Schueler/~a/Fehlstunden" (number->string matrNr))))
 
-(define (getStudent [matrNr #f])
-  (let ([url (if matrNr
-                 (string-append "/api" "/Schueler/" (number->string matrNr))
-                 (string-append "/api" "/Schueler"))])
-    (authenticated-request url
-                           (lambda (url auth)
-                             (let ([response (get url
-                                                  #:auth auth
-                                                  #:headers '#hash((Content-Type . "application/x-www-form-urlencoded")))])
-                               (response-json response))))))
+(define (getStudent [matrNr #f] [klasse #f])
+  (let ([url (cond
+               [matrNr (string-append "/api/Schueler/" (number->string matrNr))]
+               [klasse (format "/api/Klassen/~a/Schueler" klasse)]
+               [else "/api/Schueler"])]) ; Default or fallback URL
+    (make-authenticated-request url)))
 
-(define (getFWKlasse [fach #f])
-  (let ([url (if matrNr
-                 (string-append "/api" "/Schueler/" (number->string matrNr))
-                 (string-append "/api" "/Schueler"))])
-    (authenticated-request url
-                           (lambda (url auth)
-                             (let ([response (get url
-                                                  #:auth auth
-                                                  #:headers '#hash((Content-Type . "application/x-www-form-urlencoded")))])
-                               (response-json response))))))
-
-(define (getFW [matrNr #f] [klasse #f] [fach #f])
-  (let
-      ([url (cond
-              ;; Both matrNr and klasse are set, which is not allowed
-              [(and matrNr klasse) (error "Cannot have both matrNr and klasse set")]
-              ;; Only klasse is set
-              [(and klasse (not fach)) (string-append "/api/Klassen/" klasse "Fruehwarnungen")]
-              ;; Klasse and fach are both set
-              [(and klasse fach) (string-append "/api/Klassen/" klasse "/fach/" fach)]
-              ;; Only matrNr is set
-              [matrNr (string-append  "/api/Schueler/" (number->string matrNr) "Fruehwarnungen")]
-              ;; Only fach is set, which is not allowed
-              [fach (error "Setting only fach is not allowed")]
-              ;; Nothing is set, use a default URL
-              (else (string-append "/api/Schueler")))])
-    (authenticated-request url)))
-
-
+(define (getFW [matrNr #f] [klasse #f] [subject #f])
+  (let ([url (cond
+               [(and matrNr subject)
+                (string-append "/api/Schueler/" (number->string matrNr) "/Faecher/" subject "/Fruehwarnungen")]
+               [matrNr
+                (string-append "/api/Schueler/" (number->string matrNr) "/Fruehwarnungen")]
+               [(and klasse subject)
+                (string-append "/api/Klassen/" klasse "/Faecher/" subject "/Fruehwarnungen")]
+               [klasse
+                (string-append "/api/Klassen/" klasse "/Fruehwarnungen")]
+               [else (error "Invalid combination of parameters")])])
+    (make-authenticated-request url)))
 
 
 (define (generateStudentInfo matrNr)
@@ -167,24 +180,26 @@
     json-obj))
 
 
+
+
 (define (hashes-to-lists hashes)
-  (if (null? hashes)
-      '()
-      (let* ((keys (hash-keys (first hashes)))
-             (rows (map (lambda (hash)
-                          (map (lambda (key)
-                                 (hash-ref hash key))
-                               keys))
-                        hashes)))
-        (cons keys rows))))
+  ;; Check if the input is not a list, meaning it's a single hash, and wrap it in a list
+  (let ([hashes-list (if (list? hashes) hashes (list hashes))])
+
+    (let* ((keys (hash-keys (first hashes-list)))
+           (rows (map (lambda (hash)
+                        (map (lambda (key) (hash-ref hash key))
+                             keys))
+                      hashes-list)))
+      (cons keys rows))))
 
 
-(define (print-data data)
+
+(define (print-data1 data)
   (cond
     [(equal? (output-format) "json")
      (pretty-print-jsexpr  data)]
     [(equal? (output-format) "ppable")
-     (printf "printing as pretty table\n")
      (print-table  (hashes-to-lists data))]
     [else
      (printf "printing as simple table\n")
@@ -192,14 +207,32 @@
     )
   )
 
+(define (print-data data)
+  (match data
+    [(list)
+     (printf "No data available.\n")]
+    [_
+     (cond
+       [(equal? (output-format) "json")
+        (pretty-print-jsexpr data)]
+       [(equal? (output-format) "ppable")
+        (print-table (hashes-to-lists data))]
+       [else
+        (print-simple-table (hashes-to-lists data))])]))
+
+
 
 (define (make-login-request username password)
-  (define params `((grant_type . "password")
+  (let* ([params `((grant_type . "password")
                    (username . ,username)
-                   (password . ,password)))
-  (define response-data (response-json(post (string-append url "/token")
-                                            #:form params)))
-  response-data)
+                   (password . ,password))]
+         [url (string-append base-url "/token")] ; Assume base-url is defined elsewhere
+         [response (post url #:form params)]
+         [status (response-status-code response)]
+         [operation "Login Request: "])
+    (if (= status 200)
+        (response-json response)
+        (res-err operation status (if (= status 400) "Ungültige Anmeldedaten" #f)))))
 
 (define (write-hash-to-json-file hash-table file-path)
   (call-with-output-file file-path
@@ -216,20 +249,15 @@
         (displayln "Error: Not logged in - session file not found.")
         #f))) ; Returning #f or a similar value to indicate the absence of valid data
 
-(define (process-action actionfun)
-  (let* ([data(actionfun (matrNr))]
-         [data-list (if (list? data) data (list data))]) ; Wrap in list if not already a list
-    (print-data data-list)))
-
-
 (define (choose-action action)
-
   (case action
-    [("subjects") (process-action getSubjects)]
-    [("absences") (process-action getAbsences)]
-    [("grades") (process-action getGradesForStudent)]
-    [("fw") (process-action getFW)]
-    [("studentinfo") (process-action getStudent)]
+    [("subjects") (print-data(getSubjects (matrNr)))]
+    [("absences") (print-data(getAbsences (matrNr)))]
+    [("lf") (print-data getLFs (klasse) (fach))]
+    [("grades") (print-data (getGradesForStudent (matrNr) (fach)))]
+    [("lf-grades") (print-data (getGradesForLF (lf-id) (matrNr)))]
+    [("fw") (print-data (getFW (matrNr) (klasse) (fach)))]
+    [("studentinfo") (print-data (getStudent (matrNr) (klasse)))]
     [("dump") (pretty-print-jsexpr (generateStudentInfo (matrNr))) ]
     [else 'unknown]))
 
@@ -242,12 +270,6 @@
    [("--fach") fachname
                "set fachname"
                (fach fachname)]
-   [("--matrNr") matrikelNr
-                 "set matrikelNr"
-                 (matrNr (string->number matrikelNr))]
-   [("--fachID") fachid
-                 "set fachID"
-                 (fachID fachid)]
    #:once-any
    ["--format=json" "Display data in JSON Format"
                     (output-format "json")]
@@ -258,6 +280,13 @@
    ["--format=pptable"        (
                                "Display data in prettyprinted table")
                               (output-format "ppable")]
+   #:once-any
+   [("--matrNr") matrikelNr
+                 "set matrikelNr"
+                 (matrNr (string->number matrikelNr))]
+   [("--klasse") name
+                 "klasse setzen (nur für Lehrer)"
+                 (klasse name)]
    #:once-each
    [("-l" "--login") username password
                      "Login with username and password"
@@ -273,8 +302,8 @@
    [("-s" "--subjects")
     "get subjects"
     (action "subjects")]
-   [("-f" "--fruehwarnungen")
-    "get frühwarnungen"
+   [("--fw")
+    "frühwarnungen"
     (action "fw")]
    [("-i" "--student-info")
     "get student list"
@@ -285,22 +314,44 @@
    [("-d" "--dump-student")
     "JSON dump of student with all Subjects and LFs as JSON"
     (action "dump")]
-
+   [("--lf")
+    "Leistungsfeststellungen"
+    (action "lf")]
+   [("--lf-grades") id
+                    "Noten von Leistungsfesstellung"
+                    (action "lf-grades")
+                    (lf-id (string->number id))
+                    ]
    [("-g" "--grades")  ("Get grades for a student."
                         "Teachers only: Optionally specify matrNr and/or fachID.")
                        (action "grades")]
 
    #:args () (void)))
 
-(when (action)
-  (session (read-hash-from-json-file "/tmp/nmcli-session.json"))
-  (access-token (hash-ref (session) 'access_token))
-  (cond
-    [(equal? (hash-ref (session) 'role) "Schueler")
-     (matrNr (string->number(hash-ref (session) 'matrikelNr)))
-     (choose-action(action))]
-    [(equal? (hash-ref (session) 'role) "Lehrer")
-     (choose-action(action))]
-    [else
-     (printf "Unrecognized role\n")])
+(define (session-expired? session)
+  (let* ((expires-str (hash-ref session '.expires)) ; Assuming '.expires' is correct
+         (expires-unix (rfc2822->unix-time expires-str)))
+    (< expires-unix (current-seconds))))
+
+(define pick-role-action
+  (when (action)
+    (session (read-hash-from-json-file "/tmp/nmcli-session.json"))
+    (access-token (hash-ref (session) 'access_token))
+    (if (session-expired? (session))
+        (printf "session expired, login required\n")
+        (cond
+          [(equal? (hash-ref (session) 'role) "Schueler")
+           (matrNr (string->number(hash-ref (session) 'matrikelNr)))
+           (klasse (hash-ref (session) 'className))
+           (choose-action (action))
+           ]
+          [(equal? (hash-ref (session) 'role) "Lehrer")
+           (choose-action(action))
+           ]
+          [else
+           (printf "Unrecognized role\n")])
+        )
+    )
   )
+
+pick-role-action
