@@ -7,6 +7,6 @@
 
 creates folder containing bundled release that has platform specific executable under /bin and racket runtime + dependencies bundled under /lib
 
-uses [raco-cross](https://docs.racket-lang.org/raco-cross/index.html) for platform compilation
+uses [raco-cross](https://docs.racket-lang.org/raco-cross/index.html) for cross platform compilation
 
 building requires Racket `>v8.11.1`
