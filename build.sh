@@ -19,11 +19,31 @@ do
     esac
 done
 
+
+
 # Check if target is specified
 if [ -z "$TARGET" ]; then
     echo "Target not specified. Use --target=x86_64-macosx or --target=x86_64-linux."
     exit 1
 fi
+
+
+ output=$(raco pkg show raco-cross)
+
+    # Check if package is installed
+    if echo "$output" | grep -q -v "\[none\]" && echo "$output" | grep -q "Package"; then
+        echo "raco-cross is already installed on host system"
+    else
+        echo "raco-cross is not installed on host but required for cross-compilation"
+        while true; do
+            read -p "Do you wish to install this package? (y/n) " yn
+            case $yn in
+                [Yy]* ) raco pkg install raco-cross; break;;
+                [Nn]* ) exit;;
+                * ) echo "Please answer yes or no.";;
+            esac
+        done
+    fi
 
 # Loop through the packages
 for pkg in "${packages[@]}"; do
@@ -35,7 +55,7 @@ for pkg in "${packages[@]}"; do
     else
         echo "$pkg is not installed on $TARGET."
         while true; do
-            read -p "Do you wish to install this program? (y/n) " yn
+            read -p "Do you wish to install this package? (y/n) " yn
             case $yn in
                 [Yy]* ) raco cross --target "$TARGET" pkg install "$pkg"; break;;
                 [Nn]* ) exit;;
@@ -47,7 +67,7 @@ done
 
 raco cross --target "$TARGET" exe -o nm-cli nm-cli.rkt 
 raco cross --target "$TARGET" distribute nm-cli-release-"$TARGET" nm-cli
-tar -czvf nm-cli-release-"$TARGET".tar-gz nm-cli-release-"$TARGET"
+#tar -czvf nm-cli-release-"$TARGET".tar-gz nm-cli-release-"$TARGET"
 
 rm -r nm-cli-release-"$TARGET"
 
