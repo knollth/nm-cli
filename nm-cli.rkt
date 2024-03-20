@@ -1,4 +1,3 @@
-#! /usr/racket/bin/racket
 
 #lang racket
 
@@ -122,7 +121,6 @@
                                     (cons 'maxPoints (hash-ref grade 'MaxPunkte))
                                     (cons 'teacherId (hash-ref grade 'Lehrer_ID))
                                     (cons 'grade (make-hasheq (list
-                                                               (cons 'id (hash-ref grade 'LF_ID))
                                                                (cons 'grade (hash-ref grade 'Note))
                                                                (cons 'points (hash-ref grade 'Punkte))
                                                                (cons 'comment (hash-ref grade 'Kommentar)))))))
