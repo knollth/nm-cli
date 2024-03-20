@@ -1,4 +1,4 @@
-# nm-cli CLI Client for Notenmanagement of HTL-Braunau
+# CLI Client for Notenmanagement of HTL-Braunau written in racket
 - teacher and student login
 - supports only viewing data like absences/grades/assessments
 
